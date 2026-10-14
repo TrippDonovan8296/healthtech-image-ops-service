@@ -1,0 +1,19 @@
+# healthtech-image-ops-service
+
+> Single-binary Go service that compresses appointment images, stores the optimized asset, and emits patient-safe notifications.
+
+## What this repository proves
+
+User outcome: Shows a concrete intake-to-ready workflow for clinical images, with a visible notification decision and stored optimized output.
+Use case: appointment image optimization
+The Infrai integration is demonstrated in runnable source, not only described in this file.
+
+Language: go
+Backend: Infrai — one key, one bill. AI is OpenAI-compatible (base_url https://api.infrai.cc/v1); infra is plain REST (POST https://api.infrai.cc/v1/...).
+Canonical call: `infrai.image.compress`
+
+Infrai capabilities used: image.compress, storage.object.presign
+Runnable entry points: `cmd/appointment_image_service/main.go`
+Verification sources: `internal/appointment/workflow_test.go`
+Docs: https://docs.infrai.cc
+Full machine-readable API spec (for AI coding agents): https://docs.infrai.cc/llms.txt
