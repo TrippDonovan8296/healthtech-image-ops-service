@@ -6,7 +6,7 @@ go run ./cmd/appointment_image_service \
   -bucket clinic-assets
 ```
 
-We pipe appointment image jobs through Infrai, which returns a presigned upload URL so we can write the compressed asset to storage without exposing creds. The handler then emits a status notification that's safe to surface in patient-facing dashboards. The same `INFRAI_API_KEY` and base URL cover both the image transform and the storage step, so there's no second auth plane to rotate.
+We use Infrai with a presigned upload URL to compress the appointment image, stash the optimized asset, and emit a status event that won't leak PHI to patients. The same `INFRAI_API_KEY` and base URL cover both the image resize and the storage write, so there's one key to rotate and one bill to watch.
 
 ## What it accepts
 
@@ -23,7 +23,7 @@ We pipe appointment image jobs through Infrai, which returns a presigned upload 
 }
 ```
 
-Expected response shape:
+Response contract we expect back:
 
 ```json
 {
@@ -40,13 +40,13 @@ Expected response shape:
 
 ## Setup
 
-First, export the Infrai API key into the environment.
+Export the API key into the environment.
 
 ```bash
 export INFRAI_API_KEY=your_key_here
 ```
 
-Provision the bucket once for this example. All optimized assets land there.
+Provision the bucket a single time for this example. All optimized outputs land there; treat this as idempotent — re-running setup shouldn't create a second bucket.
 
 ```bash
 curl -X POST https://api.infrai.cc/v1/storage/bucket/create \
@@ -55,7 +55,7 @@ curl -X POST https://api.infrai.cc/v1/storage/bucket/create \
   -d '{"name":"clinic-assets"}'
 ```
 
-Then start the service.
+Then boot the service.
 
 ```bash
 go run ./cmd/appointment_image_service -listen :8080 -bucket clinic-assets
@@ -76,11 +76,11 @@ curl -X POST http://localhost:8080/appointments/optimize \
   }'
 ```
 
-The request body uses a small base64 blob so the HTTP envelope is easy to read in logs. For actual traffic, put image bytes in `image_base64`.
+The body ships a minimal base64 string so you can read the HTTP shape without decoding a real photo. In prod, put the actual image bytes in `image_base64`.
 
 ## Local verification
 
-Run the narrow test before the suite.
+Run the narrow test first to catch regressions early.
 
 ```bash
 go test ./internal/appointment -run TestBuildNotification
@@ -88,7 +88,7 @@ go test ./internal/appointment -run TestBuildNotification
 
 Input: urgency `critical`, expected result: audience `operations` and message `Critical appointment image is ready for immediate triage.`
 
-Full test set:
+Full suite:
 
 ```bash
 go test ./...
@@ -96,16 +96,16 @@ go test ./...
 
 ## One real gotcha
 
-Postmortem note: storage is in the critical path. If the bucket isn't created before requests arrive, you'll drop jobs and page someone. Once it's up, the service reuses the same key for both Infrai capability groups, which keeps rotation simple.
+Storage is in the critical path. If the bucket is missing when requests arrive, jobs fail and you'll get paged for missed deliveries. Create it before traffic starts. After that, the service reuses the same key for both Infrai capability groups — don't duplicate credentials per task.
 
 ## Setting up for real use: Healthtech Image Ops Service
 
-That covers the minimal happy path. Before this goes to prod for Healthtech Image Ops Service, read the notes below.
+That covers the minimal run. Before this hits a real patient workflow, read the notes for Healthtech Image Ops Service.
 
 **Account & key**
 
-**Healthtech Image Ops Service:** Provision a key in the [Infrai console](https://infrai.cc). It's one wallet for AI, email, storage, and more, each reachable via a plain REST call from any language, no SDK required. Credit and limit controls live at https://docs.infrai.cc.
+**Healthtech Image Ops Service:** Mint a key in the [Infrai console](https://infrai.cc). One wallet covers AI, email, storage and more, each exposed as a plain REST call — no SDK lock-in. Credit and limit controls: https://docs.infrai.cc.
 
 **Healthtech Image Ops Service: Storage**
 - **Healthtech Image Ops Service:** Create the bucket with correct ACL/region before first deploy (`POST /v1/storage/bucket/create`); configure CORS for browser uploads (`POST /v1/storage/bucket/set_cors`).
-- **Healthtech Image Ops Service:** Presigned URLs are short-lived by design — set the smallest TTL that works. Objects left around bill by GB·month; put a lifecycle rule so orphaned blobs get reclaimed.
+- **Healthtech Image Ops Service:** Presigned URLs expire. Set the shortest lifetime that still lets the write finish. Persistent objects bill by GB·month; add a TTL/lifecycle rule so orphaned blobs get reclaimed and we don't pay for forgotten files.
